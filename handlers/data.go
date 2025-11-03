@@ -96,7 +96,7 @@ func startSheetsSync(database *db.Database) {
 	if sheetsResetCh == nil {
 		sheetsResetCh = make(chan struct{}, 1)
 	}
-	interval := 10 * time.Minute
+	interval := 100 * time.Second
 	timer := time.NewTimer(interval)
 	defer timer.Stop()
 

@@ -17,6 +17,7 @@ for bin in  exunreg25; do
     echo "Removed old binary: $bin"
   fi
 done
+export PATH=/usr/local/go/bin:$PATH
 
 if go build -o exunreg25 .; then
   echo "Built exunreg25"

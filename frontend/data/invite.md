@@ -20,20 +20,25 @@ So, who should participate in Exun 2025? If you are someone, or know someone, wh
 
 ## **Events**
 
-- We have 23 events in disciplines like creative fields such as Web & App development to 2D & 3D Design (Build), to technical fields like Machine Learning (ExML), Computational Linguistics (Turing Test), and Competitive Programming (CP).
+- We have 20 events in disciplines like creative fields such as Web & App development to 2D & 3D Design (Build), to technical fields like Machine Learning (ExML), Computational Linguistics (Turing Test), and Competitive Programming (CP).
 
 - Are you interested in some other kinds of events as well? With our wide array of options, we've got you covered! We have the Girls in Tech event, where participants will learn a new technical skill through workshops and then participate in a contest. We also have the Quiz, Crossword, and Surprise events for the inquisitive.
 
-- We have also teamed up with four other clubs in our school to offer you a chance to show off your skillset: DomainSquare+, the Gaming society of our school; Roboknights, the robotics club; CubXL, the cubing club and CyberX, the Cybersecurity Club.
+- We have also teamed up with three other clubs in our school to offer you a chance to show off your skillset: DomainSquare+, the Gaming society of our school; Roboknights, the robotics club and CubXL, the cubing club.
 
 - Please check our [**Events**](https://reg.exunclan.com/events) page for details of the full spectrum of events Exun 2025 has to offer. Most events will have preliminary rounds which will be conducted prior to the offline days. (More details can be found at [**exun.co/25/schedule**](https://exun.co/25/schedule)) while other events will fully happen onsite on November 9-10, so be sure to check that out!
 
+## **Communication**
+
+- All communication will be done through [**WhatsApp**](https://exun.co/25/whatsapp)
+
+- Additionally, if you have any queries you may also write a mail to **exun@dpsrkp.net** or fill out [**exun.co/25/queries**](https://exun.co/25/queries)
 
 ## **Prizes & Overall Trophy**
 
 ### **Event Prizes**
 
-We have different prizes available for teams (individual or multiple participants) who win 1st, 2nd, and 3rd places, along with special prizes provided by our event partners.
+We have different prizes available for teams (individual or multiple participants) who win 1st, 2nd, and 3rd places, along with special prizes like gift cards.
 
 
 ### **Overall Trophy**
@@ -52,14 +57,13 @@ However, first, what is a "cryptic hunt"? To put it simply: Cryptic hunts are th
 
 Be sure to mark your calendars for Exun 2025!
 
-|                                   |                                    |               |
-| --------------------------------- | ---------------------------------- | ------------- |
-| Last date for Online registration | 6th November 2025\*                |               |
-| Online Events and Prelims         | 27th October to 6th November, 2025 |               |
-| Onsite Events                     | 9th and 10th November, 2025        |               |
-|                                   | 9th November                       | 10th November |
-| Onsite Events Timings             | 9AM - 4PM                          | 8AM - 3PM     |
-| Onsite Events Reporting Time      | 8:30AM                             | 7:30AM        |
+|                                   |                                    
+| --------------------------------- | ---------------------------------- |
+| Last date for Online registration | 19th November 2025\*                |
+| Online Events and Prelims         | 14th November to 19th November, 2025 |
+| Onsite Events                     | 22nd November, 2025        |
+| Onsite Events Timings             | 9AM - 3:30PM                          |
+| Onsite Events Reporting Time      | 8:30AM                             |
 
 **\*:** For events with an online preliminary round, registrations end 12 hours before the submission deadline. See the schedule at [**exun.co/25/schedule**](https://exun.co/25/schedule)
 
