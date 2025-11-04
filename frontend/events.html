@@ -14,6 +14,7 @@
     <link rel="stylesheet" href="/css/toast.css">
     <link rel="stylesheet" href="/css/query.css">
     <link rel="stylesheet" href="/css/chat.css">
+    <link rel="stylesheet" href="/css/sponsor.css">
 </head>
 <body data-page="events">
     {{template "navbar" .}}
@@ -31,7 +32,9 @@
                 </div>
                 {{end}}
             </header>
-            
+        <h2 class="sponsors-title" style="font-size: 3rem;">Event Partners
+        {{template "sponsors" .Sponsors}}
+        </h2>
             <div class="events-page__filters" id="event-filters">
                 {{range .Categories}}
                 <button class="filter-btn" data-filter="{{.Key}}">{{.Name}}</button>
@@ -53,7 +56,9 @@
                     {{end}}
                 </div>
             </div>
+            
         </div>
+        
     </main>
     
     {{template "footer" .}}
@@ -69,6 +74,7 @@
     <script src="/js/utils.js"></script>
     <script src="/js/navigation.js"></script>
     <script src="/js/events.js"></script>
+    <script src="/js/sponsors.js"></script>
     
 </body>
 </html>

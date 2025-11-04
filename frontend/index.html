@@ -13,6 +13,7 @@
     <link rel="stylesheet" href="/css/toast.css">
     <link rel="stylesheet" href="/css/query.css">
     <link rel="stylesheet" href="/css/chat.css">
+    <link rel="stylesheet" href="/css/sponsor.css">
 </head>
 <body data-page="home">
     {{template "navbar" .}}
@@ -38,14 +39,15 @@
                         View Brochure
                     </button>
                 </div>
-                
                 <p class="hero__notice">
                     The registrations for Exun 2025 are open <span class="highlight">NOW</span>. Please email exun@dpsrkp.net for further queries.
                 </p>
             </div>
         </section>
-        
         <section class="events-section" style="padding-top: 10vw;">
+                <h2 class="sponsors-title" style="font-size: 4rem;">Event Partners
+        {{template "sponsors" .Sponsors}}
+    </h2>
             <h2 class="events-section__title">Our Events</h2>
             <div class="events-grid" id="events-grid">
                 {{range .Events}}
@@ -69,5 +71,6 @@
     <script src="/js/utils.js"></script>
     <script src="/js/navigation.js"></script>
     <script src="/js/home.js"></script>
+    <script src="/js/sponsors.js"></script>
 </body>
 </html>

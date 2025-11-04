@@ -1,0 +1,26 @@
+/* Sponsor component styles */
+.sponsors-row{
+	display:flex;
+	gap:1.5rem;
+	align-items:center;
+	justify-content:center;
+	flex-wrap:wrap;
+	width:100%;
+	padding:1rem 0;
+}
+.sponsor-link{
+	display:inline-flex;
+	align-items:center;
+	justify-content:center;
+}
+.sponsor-img{
+	display:block;
+	width:auto;
+}
+.sponsors-title{
+  text-align:center;
+  font-size:28px;
+  margin:2rem 0 1rem 0;
+  font-weight:700;
+}
+

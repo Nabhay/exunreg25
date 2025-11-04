@@ -30,6 +30,7 @@ type TemplateData struct {
 	Summary          *Summary
 	PageTitle        string
 	CurrentPath      string
+	Sponsors         []Sponsor
 }
 
 type Category struct {
@@ -90,6 +91,13 @@ type EventStats struct {
 	TotalTeams        int    `json:"total_teams"`
 	Mode              string `json:"mode"`
 	Eligibility       string `json:"eligibility"`
+}
+
+type Sponsor struct {
+	ImageURL string `json:"imageUrl"`
+	Alt      string `json:"alt"`
+	Link     string `json:"link"`
+	Height   string `json:"height"`
 }
 
 func InitTemplates() error {

@@ -1,0 +1,11 @@
+{{define "sponsors"}}
+<link rel="stylesheet" href="/css/sponsor.css">
+<div class="sponsors-row">
+{{- range .}}
+  <a href="{{.Link}}" target="_blank" rel="noopener noreferrer" class="sponsor-link">
+  <img src="{{.ImageURL}}" alt="{{.Alt}}" class="sponsor-img" data-height="{{.Height}}">
+  </a>
+{{- end}}
+</div>
+<script src="/js/sponsors.js"></script>
+{{end}}

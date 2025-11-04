@@ -1,0 +1,32 @@
+[
+  {
+    "imageUrl": "/assets/intel.png",
+    "alt": "Intel",
+    "link": "https://www.intel.com/",
+    "height": "150px"
+  },
+  {
+    "imageUrl": "/assets/athena.png",
+    "alt": "Athena Education",
+    "link": "https://www.athenaeducation.co.in/",
+    "height": "200px"
+  },
+  {
+    "imageUrl": "/assets/playstation.png",
+    "alt": "Playstation",
+    "link": "https://www.playstation.com/",
+    "height": "75px"
+  },
+  {
+    "imageUrl": "/assets/cubelelo.png",
+    "alt": "Cubelelo",
+    "link": "https://www.cubelelo.com/",
+    "height": "150px"
+  },
+  {
+    "imageUrl": "/assets/xyz.png",
+    "alt": "Cubelelo",
+    "link": "https://www.gen.xyz/",
+    "height": "75px"
+  }
+]

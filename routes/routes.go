@@ -44,6 +44,18 @@ func getTemplateData(r *http.Request) templates.TemplateData {
 	data.IsBrochure = strings.HasPrefix(r.URL.Path, "/brochure")
 	data.IsQuery = (r.URL.Path == "/query")
 
+	if b, err := os.ReadFile("frontend/data/sponsors.json"); err == nil {
+		var s []templates.Sponsor
+		if err2 := json.Unmarshal(b, &s); err2 == nil {
+			data.Sponsors = s
+		}
+	} else if b2, err2 := os.ReadFile("data/sponsors.json"); err2 == nil {
+		var s []templates.Sponsor
+		if err3 := json.Unmarshal(b2, &s); err3 == nil {
+			data.Sponsors = s
+		}
+	}
+
 	return data
 }
 
