@@ -78,41 +78,36 @@ func GetUserSummary(w http.ResponseWriter, r *http.Request) {
 	pendingCount := 0
 	totalRegistrations := 0
 
-	eventsRaw, err := globalDB.GetAll("events")
-	if err == nil {
-		for _, evd := range eventsRaw {
-			if ev, ok := evd.(*db.Event); ok {
-				if user.Individual && !ev.IndependentRegistration {
-					continue
-				}
-				eventID := ev.ID
-				parts := []db.Participant{}
-				if !user.Individual {
-					if user.Registrations != nil {
-						if p, ok := user.Registrations[eventID]; ok {
-							parts = p
-						}
-					}
-				}
-				status := "confirmed"
-				if len(parts) == 0 {
-					status = "pending"
-					pendingCount++
-				} else {
-					totalParticipants += len(parts)
-					totalRegistrations++
-				}
-
-				eventSummary := EventSummary{
-					EventID:      eventID,
-					EventName:    ev.Name,
-					Participants: parts,
-					TotalCount:   len(parts),
-					Status:       status,
-					Capacity:     ev.Participants,
-				}
-				eventSummaries = append(eventSummaries, eventSummary)
+	if evs, err := GetAllEventsData(); err == nil {
+		for _, ev := range evs {
+			// For individual users, show only independent-registration events
+			if user.Individual && !ev.IndependentRegistration {
+				continue
 			}
+			eventID := ev.ID
+			parts := []db.Participant{}
+			if user.Registrations != nil {
+				if p, ok := user.Registrations[eventID]; ok {
+					parts = p
+				}
+			}
+			status := "confirmed"
+			if len(parts) == 0 {
+				status = "pending"
+				pendingCount++
+			} else {
+				totalParticipants += len(parts)
+				totalRegistrations++
+			}
+
+			eventSummaries = append(eventSummaries, EventSummary{
+				EventID:      eventID,
+				EventName:    ev.Name,
+				Participants: parts,
+				TotalCount:   len(parts),
+				Status:       status,
+				Capacity:     ev.Participants,
+			})
 		}
 	}
 

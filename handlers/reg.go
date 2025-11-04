@@ -30,6 +30,9 @@ type RegistrationResponse struct {
 }
 
 func SubmitRegistrations(w http.ResponseWriter, r *http.Request) {
+	// Block registrations while a sheets sync is in progress to avoid conflicts.
+	sheetsOpMu.Lock()
+	defer sheetsOpMu.Unlock()
 	if r.Method != http.MethodPost {
 		response := Response{
 			Status: "error",
@@ -235,6 +238,12 @@ func SubmitRegistrations(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(false)
 		return
 	}
+
+	// Immediately mirror this user's updated state to the Google Sheet (DB is source of truth)
+	if err := UpdateUsersSheetRowForEmail(globalDB, email); err != nil {
+		// Non-fatal for the API; log and continue
+		fmt.Printf("sheet push failed for %s: %v\n", email, err)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(true)
 }
@@ -309,22 +318,17 @@ func validateEmailFormat(email string) bool {
 }
 
 func loadEventFromJSON(eventID string) (*db.Event, error) {
-	if ev, err := globalDB.Get("events", eventID); err == nil && ev != nil {
-		if dbEv, ok := ev.(*db.Event); ok {
-			return dbEv, nil
+	// Always load from JSON-backed list
+	events, err := GetAllEventsData()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load events json: %v", err)
+	}
+	for _, ev := range events {
+		if ev.ID == eventID || slugify(ev.Name) == eventID {
+			// return a copy
+			e := ev
+			return &e, nil
 		}
 	}
-
-	all, err := globalDB.GetAll("events")
-	if err == nil {
-		for _, item := range all {
-			if dbEv, ok := item.(*db.Event); ok {
-				if dbEv.ID == eventID || slugify(dbEv.Name) == eventID {
-					return dbEv, nil
-				}
-			}
-		}
-	}
-
 	return nil, fmt.Errorf("event not found")
 }

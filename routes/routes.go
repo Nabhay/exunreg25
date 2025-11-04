@@ -376,6 +376,13 @@ func SetupRoutes() *http.ServeMux {
 
 	mux.HandleFunc("/api/query", handlers.QueryHandler)
 
+	// Webhook endpoint for Google Sheets Apps Script row updates
+	mux.HandleFunc("/api/sheets/webhook", handlers.SheetsRowUpdate)
+	// Headers/Schema for apps script
+	mux.HandleFunc("/api/sheets/headers", handlers.SheetsHeaders)
+	// Ping for secret verification
+	mux.HandleFunc("/api/sheets/ping", handlers.SheetsPing)
+
 	submitRegHandler := http.HandlerFunc(handlers.SubmitRegistrations)
 	mux.Handle("/api/submit_registrations", middleware.AuthRequired(submitRegHandler))
 

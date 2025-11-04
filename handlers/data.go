@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"reflect"
 	"sort"
@@ -19,6 +20,190 @@ import (
 	"google.golang.org/api/option"
 	sheets "google.golang.org/api/sheets/v4"
 )
+
+// Event definition for building users sheet registration columns
+type eventDef struct {
+	Slug         string
+	Participants int
+}
+
+func getEventDefs() ([]eventDef, error) {
+	evs, err := GetAllEventsData()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]eventDef, 0, len(evs))
+	for _, e := range evs {
+		out = append(out, eventDef{Slug: e.ID, Participants: e.Participants})
+	}
+	return out, nil
+}
+
+// Build desired headers for the users sheet: DB columns + flattened registration columns per event
+func buildUsersHeaders(dbHeader []interface{}, evs []eventDef) []string {
+	headers := make([]string, 0, len(dbHeader))
+	for _, c := range dbHeader {
+		headers = append(headers, fmt.Sprintf("%v", c))
+	}
+	for _, e := range evs {
+		p := e.Participants
+		if p <= 0 {
+			p = 1
+		}
+		for i := 1; i <= p; i++ {
+			base := fmt.Sprintf("%s-%d", e.Slug, i)
+			headers = append(headers, base+" name")
+			headers = append(headers, base+" email")
+			headers = append(headers, base+" number")
+			headers = append(headers, base+" class")
+		}
+	}
+	return headers
+}
+
+// Parse a flattened registration header into (slug, index [1-based], field)
+func parseRegHeader(h string) (slug string, idx int, field string, ok bool) {
+	h = strings.TrimSpace(strings.ToLower(h))
+	// split on last space to get field
+	sp := strings.LastIndex(h, " ")
+	if sp <= 0 || sp >= len(h)-1 {
+		return
+	}
+	left := h[:sp]
+	field = strings.TrimSpace(h[sp+1:])
+	if field != "name" && field != "email" && field != "number" && field != "class" {
+		return
+	}
+	dash := strings.LastIndex(left, "-")
+	if dash <= 0 || dash >= len(left)-1 {
+		return
+	}
+	slug = left[:dash]
+	nstr := left[dash+1:]
+	n, err := strconv.Atoi(nstr)
+	if err != nil || n <= 0 {
+		return
+	}
+	idx = n
+	ok = true
+	return
+}
+
+// Extract value for a sheet header from a DB users row (handles flattened registration columns)
+func getUsersValueForHeader(dbIndexLower map[string]int, dbRow []interface{}, header string) string {
+	if di, ok := dbIndexLower[strings.ToLower(header)]; ok {
+		if di >= 0 && di < len(dbRow) {
+			return fmt.Sprintf("%v", dbRow[di])
+		}
+		return ""
+	}
+	// Try flattened registration column
+	slug, idx, field, ok := parseRegHeader(header)
+	if !ok {
+		return ""
+	}
+	regsIdx, hasRegs := dbIndexLower["registrations"]
+	if !hasRegs || regsIdx < 0 || regsIdx >= len(dbRow) {
+		return ""
+	}
+	raw := fmt.Sprintf("%v", dbRow[regsIdx])
+	if strings.TrimSpace(raw) == "" || strings.TrimSpace(raw) == "{}" {
+		return ""
+	}
+	var regs map[string][]db.Participant
+	if err := json.Unmarshal([]byte(raw), &regs); err != nil {
+		return ""
+	}
+	parts := regs[slug]
+	pos := idx - 1
+	if pos < 0 || pos >= len(parts) {
+		return ""
+	}
+	pr := parts[pos]
+	switch field {
+	case "name":
+		return pr.Name
+	case "email":
+		return pr.Email
+	case "number":
+		return pr.Phone
+	case "class":
+		if pr.Class == 0 {
+			return ""
+		}
+		return fmt.Sprintf("%d", pr.Class)
+	default:
+		return ""
+	}
+}
+
+// Assemble registrations JSON from a sheet row using flattened columns; returns JSON string
+func buildRegistrationsFromSheetRow(headers []string, row []string) string {
+	byEvent := map[string]map[int]db.Participant{}
+	for i, h := range headers {
+		if i >= len(row) {
+			continue
+		}
+		slug, idx, field, ok := parseRegHeader(h)
+		if !ok {
+			continue
+		}
+		if _, ok := byEvent[slug]; !ok {
+			byEvent[slug] = map[int]db.Participant{}
+		}
+		val := strings.TrimSpace(row[i])
+		p := byEvent[slug][idx]
+		switch field {
+		case "name":
+			p.Name = val
+		case "email":
+			p.Email = val
+		case "number":
+			p.Phone = val
+		case "class":
+			if val == "" {
+				p.Class = 0
+			} else {
+				if n, err := strconv.Atoi(val); err == nil {
+					p.Class = n
+				} else {
+					p.Class = 0
+				}
+			}
+		}
+		byEvent[slug][idx] = p
+	}
+	out := map[string][]db.Participant{}
+	for slug, mp := range byEvent {
+		// Compact indices starting at 1, keep those with any non-empty field
+		maxIdx := 0
+		for k := range mp {
+			if k > maxIdx {
+				maxIdx = k
+			}
+		}
+		arr := make([]db.Participant, 0, maxIdx)
+		for i := 1; i <= maxIdx; i++ {
+			p := mp[i]
+			if strings.TrimSpace(p.Name) == "" && strings.TrimSpace(p.Email) == "" && strings.TrimSpace(p.Phone) == "" {
+				continue
+			}
+			// Preserve class captured from the sheet instead of resetting to 0
+			arr = append(arr, db.Participant{Name: p.Name, Email: p.Email, Class: p.Class, Phone: p.Phone})
+		}
+		if len(arr) > 0 {
+			out[slug] = arr
+		}
+	}
+	if len(out) == 0 {
+		return "{}"
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}
 
 func parseFlexibleTime(s string) (time.Time, error) {
 	s = strings.TrimSpace(s)
@@ -196,116 +381,15 @@ func syncAllTablesToSheets(database *db.Database) error {
 		return fmt.Errorf("failed to list tables: %v", err)
 	}
 
-	eventsCap := map[string]int{}
-	evRows, err := queryTableRows(database, "events")
-	if err == nil {
-		for _, er := range evRows[1:] {
-			id := fmt.Sprintf("%v", er[0])
-			capStr := fmt.Sprintf("%v", er[6])
-			if capStr == "" {
-				continue
-			}
-			if v, err := strconv.Atoi(capStr); err == nil {
-				eventsCap[id] = v
-			}
-		}
-	}
+	// NOTE: usr_regs syncing is removed. All registrations are managed via the users sheet only.
 
-	usersRows, err := queryTableRows(database, "users")
-	if err == nil {
-		if len(usersRows) > 0 {
-			userHeader := usersRows[0]
-			userIndexLower := map[string]int{}
-			for i, c := range userHeader {
-				key := strings.ToLower(fmt.Sprintf("%v", c))
-				userIndexLower[key] = i
-			}
-			unameIdx := -1
-			regsIdx := -1
-			instIdx := -1
-			updatedIdx := -1
-			if v, ok := userIndexLower["username"]; ok {
-				unameIdx = v
-			}
-			if v, ok := userIndexLower["registrations"]; ok {
-				regsIdx = v
-			}
-			if v, ok := userIndexLower["institution_name"]; ok {
-				instIdx = v
-			} else if v, ok := userIndexLower["institution"]; ok {
-				instIdx = v
-			}
-			if v, ok := userIndexLower["updated_at"]; ok {
-				updatedIdx = v
-			}
-
-			upsertQ := `INSERT INTO usr_regs (username, institution, event_id, p1_name, p1_email, p1_class, p1_phone, p2_name, p2_email, p2_class, p2_phone, p3_name, p3_email, p3_class, p3_phone, p4_name, p4_email, p4_class, p4_phone, p5_name, p5_email, p5_class, p5_phone, p6_name, p6_email, p6_class, p6_phone, p7_name, p7_email, p7_class, p7_phone, p8_name, p8_email, p8_class, p8_phone, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(username, event_id) DO UPDATE SET p1_name = excluded.p1_name, p1_email = excluded.p1_email, p1_class = excluded.p1_class, p1_phone = excluded.p1_phone, p2_name = excluded.p2_name, p2_email = excluded.p2_email, p2_class = excluded.p2_class, p2_phone = excluded.p2_phone, p3_name = excluded.p3_name, p3_email = excluded.p3_email, p3_class = excluded.p3_class, p3_phone = excluded.p3_phone, p4_name = excluded.p4_name, p4_email = excluded.p4_email, p4_class = excluded.p4_class, p4_phone = excluded.p4_phone, p5_name = excluded.p5_name, p5_email = excluded.p5_email, p5_class = excluded.p5_class, p5_phone = excluded.p5_phone, p6_name = excluded.p6_name, p6_email = excluded.p6_email, p6_class = excluded.p6_class, p6_phone = excluded.p6_phone, p7_name = excluded.p7_name, p7_email = excluded.p7_email, p7_class = excluded.p7_class, p7_phone = excluded.p7_phone, p8_name = excluded.p8_name, p8_email = excluded.p8_email, p8_class = excluded.p8_class, p8_phone = excluded.p8_phone, updated_at = excluded.updated_at`
-
-			const maxParts = 8
-			for _, ur := range usersRows[1:] {
-				username := ""
-				if unameIdx >= 0 && unameIdx < len(ur) {
-					username = fmt.Sprintf("%v", ur[unameIdx])
-				}
-				institution := ""
-				if instIdx >= 0 && instIdx < len(ur) {
-					institution = fmt.Sprintf("%v", ur[instIdx])
-				}
-				regsRaw := ""
-				if regsIdx >= 0 && regsIdx < len(ur) {
-					regsRaw = fmt.Sprintf("%v", ur[regsIdx])
-				}
-				if regsRaw == "" || regsRaw == "{}" {
-					continue
-				}
-				var regs map[string][]db.Participant
-				if err := json.Unmarshal([]byte(regsRaw), &regs); err != nil {
-					continue
-				}
-				userUpdated := time.Now()
-				if updatedIdx >= 0 && updatedIdx < len(ur) {
-					s := fmt.Sprintf("%v", ur[updatedIdx])
-					if t, err := parseFlexibleTime(s); err == nil && !t.IsZero() {
-						userUpdated = t
-					}
-				}
-				now := time.Now()
-				for evID, parts := range regs {
-					var existingUpdated sql.NullString
-					err := database.QueryRow("SELECT updated_at FROM usr_regs WHERE username = ? AND event_id = ?", username, evID).Scan(&existingUpdated)
-					if err != nil && err != sql.ErrNoRows {
-						continue
-					}
-					if err == nil {
-						existingT, _ := parseFlexibleTime(fmt.Sprintf("%v", existingUpdated.String))
-						if !userUpdated.After(existingT) {
-							continue
-						}
-					}
-					args := []interface{}{username, institution, evID}
-					for i := 0; i < maxParts; i++ {
-						if i < len(parts) {
-							args = append(args, parts[i].Name)
-							args = append(args, parts[i].Email)
-							args = append(args, fmt.Sprintf("%v", parts[i].Class))
-							args = append(args, parts[i].Phone)
-						} else {
-							args = append(args, "", "", "", "")
-						}
-					}
-					args = append(args, now, userUpdated)
-					_, _ = database.Exec(upsertQ, args...)
-				}
-			}
-		}
-	}
-
+	// Only sync the users table with Sheets
 	primaryKeys := map[string]string{
-		"users":                    "email",
-		"events":                   "id",
-		"individual_registrations": "id",
-		"usr_regs":                 "id",
+		"users": "email",
 	}
+
+	// Restrict tables to users only
+	tables = []string{"users"}
 
 	for _, t := range tables {
 		rows, err := queryTableRows(database, t)
@@ -324,13 +408,78 @@ func syncAllTablesToSheets(database *db.Database) error {
 		hdr, sheetRows, err := readSheetRows(ctx, srv, spreadsheetID, sheetName)
 		if err != nil {
 			log.Printf("failed to read sheet %s: %v", sheetName, err)
-			vr := &sheets.ValueRange{Values: convertToValues(rows)}
-			rangeA1 := sheetName + "!A1"
-			_, err = srv.Spreadsheets.Values.Update(spreadsheetID, rangeA1, vr).ValueInputOption("RAW").Do()
-			if err != nil {
-				log.Printf("failed to update sheet %s: %v", sheetName, err)
+			if t == "users" {
+				// Initialize users sheet with custom headers and data
+				evs, _ := getEventDefs()
+				if len(rows) == 0 {
+					log.Printf("no DB rows for users to initialize")
+					continue
+				}
+				dbHeader := rows[0]
+				desired := buildUsersHeaders(dbHeader, evs)
+				// Build values
+				dbIndexLower := map[string]int{}
+				for i, c := range dbHeader {
+					dbIndexLower[strings.ToLower(fmt.Sprintf("%v", c))] = i
+				}
+				values := make([][]interface{}, 0, len(rows))
+				// header row
+				hdrRow := make([]interface{}, len(desired))
+				for i, h := range desired {
+					hdrRow[i] = h
+				}
+				values = append(values, hdrRow)
+				for _, dbRow := range rows[1:] {
+					line := make([]interface{}, len(desired))
+					for ci, h := range desired {
+						line[ci] = getUsersValueForHeader(dbIndexLower, dbRow, h)
+					}
+					values = append(values, line)
+				}
+				rangeA1 := sheetName + "!A1"
+				vr := &sheets.ValueRange{Values: values}
+				if _, err := srv.Spreadsheets.Values.Update(spreadsheetID, rangeA1, vr).ValueInputOption("RAW").Do(); err != nil {
+					log.Printf("failed to initialize users sheet: %v", err)
+				}
+				continue
+			} else {
+				vr := &sheets.ValueRange{Values: convertToValues(rows)}
+				rangeA1 := sheetName + "!A1"
+				_, err = srv.Spreadsheets.Values.Update(spreadsheetID, rangeA1, vr).ValueInputOption("RAW").Do()
+				if err != nil {
+					log.Printf("failed to update sheet %s: %v", sheetName, err)
+				}
+				continue
 			}
-			continue
+		}
+
+		// For users sheet, ensure desired headers exist; if not, rewrite header row
+		if t == "users" && len(rows) > 0 {
+			evs, _ := getEventDefs()
+			desired := buildUsersHeaders(rows[0], evs)
+			needRewrite := len(hdr) != len(desired)
+			if !needRewrite {
+				for i := range hdr {
+					if i >= len(desired) || !strings.EqualFold(hdr[i], desired[i]) {
+						needRewrite = true
+						break
+					}
+				}
+			}
+			if needRewrite {
+				rng := sheetName + "!A1"
+				row := make([]interface{}, len(desired))
+				for i, h := range desired {
+					row[i] = h
+				}
+				if _, err := srv.Spreadsheets.Values.Update(spreadsheetID, rng, &sheets.ValueRange{Values: [][]interface{}{row}}).ValueInputOption("RAW").Do(); err != nil {
+					log.Printf("failed to rewrite users header: %v", err)
+				} else {
+					hdr = desired
+				}
+			} else {
+				hdr = desired
+			}
 		}
 
 		pk, ok := primaryKeys[t]
@@ -363,77 +512,80 @@ func syncAllTablesToSheets(database *db.Database) error {
 				if v, ok := dbIndex[pk]; ok {
 					dbPkIdx = v
 				}
-				for sr, r := range sheetRows {
-					var pkVal string
-					if pkIndex >= 0 && pkIndex < len(r) {
-						pkVal = strings.TrimSpace(r[pkIndex])
-						if pkVal == "''" {
-							pkVal = ""
-						}
-					}
-					if pkVal == "" {
-						continue
-					}
-					var sheetUpdated time.Time
-					if sheetUpdatedIndex >= 0 && sheetUpdatedIndex < len(r) {
-						s := strings.TrimSpace(r[sheetUpdatedIndex])
-						if s == "''" {
-							s = ""
-						}
-						t, _ := parseFlexibleTime(s)
-						sheetUpdated = t
-						log.Printf("sheet->db: table=%s pk=%s rawSheetUpdated=%q parsedSheetUpdated=%v", t, pkVal, s, sheetUpdated)
-					}
-					var matchedDBRow []interface{}
-					for _, dbRow := range rows[1:] {
-						if dbPkIdx >= 0 && dbPkIdx < len(dbRow) {
-							v := fmt.Sprintf("%v", dbRow[dbPkIdx])
-							if v == pkVal {
-								matchedDBRow = dbRow
-								break
+				// Important: avoid pushing DB->Sheet before applying sheet edits for users.
+				if !strings.EqualFold(t, "users") {
+					for sr, r := range sheetRows {
+						var pkVal string
+						if pkIndex >= 0 && pkIndex < len(r) {
+							pkVal = strings.TrimSpace(r[pkIndex])
+							if pkVal == "''" {
+								pkVal = ""
 							}
 						}
-					}
-					if matchedDBRow == nil {
-						continue
-					}
-					var dbUpdated time.Time
-					if dbUpdatedIdx >= 0 && dbUpdatedIdx < len(matchedDBRow) {
-						rawDB := fmt.Sprintf("%v", matchedDBRow[dbUpdatedIdx])
-						t, _ := parseFlexibleTime(rawDB)
-						dbUpdated = t
-						log.Printf("sheet->db: table=%s pk=%s rawDBUpdated=%q parsedDBUpdated=%v", t, pkVal, rawDB, dbUpdated)
-					}
-					if dbUpdated.IsZero() {
-						log.Printf("sheet->db: table=%s pk=%s dbUpdated is zero, skipping comparison", t, pkVal)
-						continue
-					}
-					if dbUpdated.After(sheetUpdated) {
-						colsCount := len(hdr)
-						rowNum := sr + 2
-						for ci := 0; ci < colsCount; ci++ {
-							h := hdr[ci]
-							var dbVal string
-							if di, ok := dbIndex[h]; ok && di >= 0 && di < len(matchedDBRow) {
-								dbVal = fmt.Sprintf("%v", matchedDBRow[di])
-							} else {
-								dbVal = ""
+						if pkVal == "" {
+							continue
+						}
+						var sheetUpdated time.Time
+						if sheetUpdatedIndex >= 0 && sheetUpdatedIndex < len(r) {
+							s := strings.TrimSpace(r[sheetUpdatedIndex])
+							if s == "''" {
+								s = ""
 							}
-							var sheetVal string
-							if ci < len(r) {
-								sheetVal = r[ci]
-							} else {
-								sheetVal = ""
+							ts, _ := parseFlexibleTime(s)
+							sheetUpdated = ts
+							log.Printf("sheet->db: table=%s pk=%s rawSheetUpdated=%q parsedSheetUpdated=%v", t, pkVal, s, sheetUpdated)
+						}
+						var matchedDBRow []interface{}
+						for _, dbRow := range rows[1:] {
+							if dbPkIdx >= 0 && dbPkIdx < len(dbRow) {
+								v := fmt.Sprintf("%v", dbRow[dbPkIdx])
+								if v == pkVal {
+									matchedDBRow = dbRow
+									break
+								}
 							}
-							if dbVal != sheetVal {
-								col := a1ColumnName(ci)
-								rng := fmt.Sprintf("%s!%s%d", sheetName, col, rowNum)
-								vr := &sheets.ValueRange{Range: rng, Values: [][]interface{}{{dbVal}}}
-								res, err := srv.Spreadsheets.Values.Update(spreadsheetID, rng, vr).ValueInputOption("RAW").Context(ctx).Do()
-								if err != nil {
-									log.Printf("failed to update sheet %s for pk=%s (cell=%s%d): %v", sheetName, pkVal, col, rowNum, err)
+						}
+						if matchedDBRow == nil {
+							continue
+						}
+						var dbUpdated time.Time
+						if dbUpdatedIdx >= 0 && dbUpdatedIdx < len(matchedDBRow) {
+							rawDB := fmt.Sprintf("%v", matchedDBRow[dbUpdatedIdx])
+							tdb, _ := parseFlexibleTime(rawDB)
+							dbUpdated = tdb
+							log.Printf("sheet->db: table=%s pk=%s rawDBUpdated=%q parsedDBUpdated=%v", t, pkVal, rawDB, dbUpdated)
+						}
+						if dbUpdated.IsZero() {
+							log.Printf("sheet->db: table=%s pk=%s dbUpdated is zero, skipping comparison", t, pkVal)
+							continue
+						}
+						if dbUpdated.After(sheetUpdated) {
+							colsCount := len(hdr)
+							rowNum := sr + 2
+							for ci := 0; ci < colsCount; ci++ {
+								h := hdr[ci]
+								var dbVal string
+								if di, ok := dbIndex[h]; ok && di >= 0 && di < len(matchedDBRow) {
+									dbVal = fmt.Sprintf("%v", matchedDBRow[di])
 								} else {
-									log.Printf("updated sheet %s for pk=%s (cell=%s%d): updatedCells=%d", sheetName, pkVal, col, rowNum, res.UpdatedCells)
+									dbVal = ""
+								}
+								var sheetVal string
+								if ci < len(r) {
+									sheetVal = r[ci]
+								} else {
+									sheetVal = ""
+								}
+								if dbVal != sheetVal {
+									col := a1ColumnName(ci)
+									rng := fmt.Sprintf("%s!%s%d", sheetName, col, rowNum)
+									vr := &sheets.ValueRange{Range: rng, Values: [][]interface{}{{dbVal}}}
+									res, err := srv.Spreadsheets.Values.Update(spreadsheetID, rng, vr).ValueInputOption("RAW").Context(ctx).Do()
+									if err != nil {
+										log.Printf("failed to update sheet %s for pk=%s (cell=%s%d): %v", sheetName, pkVal, col, rowNum, err)
+									} else {
+										log.Printf("updated sheet %s for pk=%s (cell=%s%d): updatedCells=%d", sheetName, pkVal, col, rowNum, res.UpdatedCells)
+									}
 								}
 							}
 						}
@@ -549,13 +701,7 @@ func syncAllTablesToSheets(database *db.Database) error {
 					}
 				}
 			}
-			if len(sheetPKs) > 0 {
-				if err := deleteDBRowsNotInSheet(database, t, pk, sheetPKs); err != nil {
-					log.Printf("failed to delete missing rows for table %s: %v", t, err)
-				}
-			} else {
-				log.Printf("sheet %s has no primary-key values; skipping delete to avoid wiping DB", sheetName)
-			}
+			// Do not delete DB rows based on sheet contents; allow adding users in the sheet.
 			skippedPKs := []string{}
 			if err := applyTableUpserts(database, t, pk, hdr, sheetRows, &skippedPKs); err != nil {
 				log.Printf("failed to apply upserts for table %s: %v", t, err)
@@ -590,6 +736,9 @@ func syncAllTablesToSheets(database *db.Database) error {
 				for _, s := range skippedPKs {
 					skippedSet[s] = true
 				}
+				// Batch containers to reduce Sheets write requests
+				rowUpdates := []*sheets.ValueRange{}
+				rowsToAppend := [][]interface{}{}
 				for _, dbRow := range rows[1:] {
 					if dbPkIdx < 0 || dbPkIdx >= len(dbRow) {
 						continue
@@ -621,47 +770,62 @@ func syncAllTablesToSheets(database *db.Database) error {
 					}
 					if !exists {
 						newRow := make([]interface{}, colsCount)
+						// Build lower-cased DB index map once
+						dbIndexLower := map[string]int{}
+						for k, v := range dbIndex {
+							dbIndexLower[strings.ToLower(k)] = v
+						}
 						for ci := 0; ci < colsCount; ci++ {
 							h := hdr[ci]
-							if di, ok := dbIndex[h]; ok && di >= 0 && di < len(dbRow) {
+							if t == "users" {
+								newRow[ci] = getUsersValueForHeader(dbIndexLower, dbRow, h)
+							} else if di, ok := dbIndex[h]; ok && di >= 0 && di < len(dbRow) {
 								newRow[ci] = fmt.Sprintf("%v", dbRow[di])
 							} else {
 								newRow[ci] = ""
 							}
 						}
-						vr := &sheets.ValueRange{Values: [][]interface{}{newRow}}
-						_, _ = srv.Spreadsheets.Values.Append(spreadsheetID, sheetName+"!A1", vr).ValueInputOption("RAW").InsertDataOption("INSERT_ROWS").Context(ctx).Do()
+						rowsToAppend = append(rowsToAppend, newRow)
 						continue
 					}
 					log.Printf("db->sheet: table=%s pk=%s dbUpdated=%v sheetUpdated=%v exists=%v skipped=%v", t, pkVal, dbUpdated, sheetUpdated, exists, skippedSet[pkVal])
 					if dbUpdated.After(sheetUpdated) || skippedSet[pkVal] {
-						rowNum := sr + 2
+						// Build full row from DB and queue a single row-range update
+						dbIndexLower := map[string]int{}
+						for k, v := range dbIndex {
+							dbIndexLower[strings.ToLower(k)] = v
+						}
+						rowVals := make([]interface{}, colsCount)
 						for ci := 0; ci < colsCount; ci++ {
 							h := hdr[ci]
-							var dbVal string
-							if di, ok := dbIndex[h]; ok && di >= 0 && di < len(dbRow) {
-								dbVal = fmt.Sprintf("%v", dbRow[di])
+							if t == "users" {
+								rowVals[ci] = getUsersValueForHeader(dbIndexLower, dbRow, h)
+							} else if di, ok := dbIndex[h]; ok && di >= 0 && di < len(dbRow) {
+								rowVals[ci] = fmt.Sprintf("%v", dbRow[di])
 							} else {
-								dbVal = ""
-							}
-							var sheetVal string
-							if ci < len(sheetRows[sr]) {
-								sheetVal = sheetRows[sr][ci]
-							} else {
-								sheetVal = ""
-							}
-							if strings.TrimSpace(dbVal) != strings.TrimSpace(sheetVal) {
-								col := a1ColumnName(ci)
-								rng := fmt.Sprintf("%s!%s%d", sheetName, col, rowNum)
-								vr := &sheets.ValueRange{Range: rng, Values: [][]interface{}{{dbVal}}}
-								res, err := srv.Spreadsheets.Values.Update(spreadsheetID, rng, vr).ValueInputOption("RAW").Context(ctx).Do()
-								if err != nil {
-									log.Printf("failed to update sheet %s for pk=%s (cell=%s%d): %v", sheetName, pkVal, col, rowNum, err)
-								} else {
-									log.Printf("updated sheet %s for pk=%s (cell=%s%d): updatedCells=%d", sheetName, pkVal, col, rowNum, res.UpdatedCells)
-								}
+								rowVals[ci] = ""
 							}
 						}
+						lastCol := a1ColumnName(colsCount - 1)
+						rowNum := sr + 2
+						rng := fmt.Sprintf("%s!A%d:%s%d", sheetName, rowNum, lastCol, rowNum)
+						rowUpdates = append(rowUpdates, &sheets.ValueRange{Range: rng, Values: [][]interface{}{rowVals}})
+					}
+				}
+				// Execute batched updates (one request)
+				if len(rowUpdates) > 0 {
+					_, err := srv.Spreadsheets.Values.BatchUpdate(spreadsheetID, &sheets.BatchUpdateValuesRequest{
+						ValueInputOption: "RAW",
+						Data:             rowUpdates,
+					}).Context(ctx).Do()
+					if err != nil {
+						log.Printf("batch row updates failed for sheet %s: %v", sheetName, err)
+					}
+				}
+				if len(rowsToAppend) > 0 {
+					_, err := srv.Spreadsheets.Values.Append(spreadsheetID, sheetName+"!A1", &sheets.ValueRange{Values: rowsToAppend}).ValueInputOption("RAW").InsertDataOption("INSERT_ROWS").Context(ctx).Do()
+					if err != nil {
+						log.Printf("batch append failed for sheet %s: %v", sheetName, err)
 					}
 				}
 			}
@@ -707,9 +871,7 @@ func syncAllTablesToSheets(database *db.Database) error {
 		}
 	}
 
-	if err := mergeUsrRegsToUsers(database); err != nil {
-		log.Printf("merge usr_regs->users error: %v", err)
-	}
+	// usr_regs->users merge removed; users sheet is the single source for registrations editing.
 	return nil
 }
 
@@ -922,7 +1084,8 @@ func ensureSheetExists(ctx context.Context, srv *sheets.Service, spreadsheetID, 
 }
 
 func readSheetRows(ctx context.Context, srv *sheets.Service, spreadsheetID, sheetName string) ([]string, [][]string, error) {
-	rng := sheetName + "!A1:Z"
+	// Read a wide range to avoid truncating columns beyond Z
+	rng := sheetName + "!A1:ZZZ"
 	resp, err := srv.Spreadsheets.Values.Get(spreadsheetID, rng).Context(ctx).Do()
 	if err != nil {
 		return nil, nil, err
@@ -956,10 +1119,13 @@ func applyTableUpserts(database *db.Database, table, pk string, headers []string
 	}
 	dbRowsAll, _ := queryTableRows(database, table)
 	dbIndex := map[string]int{}
+	dbIndexLower := map[string]int{}
 	dbPkIdx := -1
 	if len(dbRowsAll) > 0 {
 		for i, c := range dbRowsAll[0] {
-			dbIndex[fmt.Sprintf("%v", c)] = i
+			name := fmt.Sprintf("%v", c)
+			dbIndex[name] = i
+			dbIndexLower[strings.ToLower(name)] = i
 		}
 		if v, ok := dbIndex[pk]; ok {
 			dbPkIdx = v
@@ -976,18 +1142,24 @@ func applyTableUpserts(database *db.Database, table, pk string, headers []string
 	if err != nil {
 		return err
 	}
+	failed := false
 	defer func() {
-		if err != nil {
-			tx.Rollback()
-		} else {
-			tx.Commit()
+		if failed {
+			_ = tx.Rollback()
+			return
 		}
+		_ = tx.Commit()
 	}()
 
 	for _, r := range rows {
 		values := map[string]string{}
 		for i, h := range headers {
-			v := r[i]
+			var v string
+			if i < len(r) {
+				v = r[i]
+			} else {
+				v = ""
+			}
 			if strings.TrimSpace(v) == "''" {
 				v = ""
 			}
@@ -996,6 +1168,11 @@ func applyTableUpserts(database *db.Database, table, pk string, headers []string
 		keyVal := values[pk]
 		if keyVal == "" {
 			continue
+		}
+		// Special handling for users: synthesize registrations JSON from flattened columns
+		if strings.EqualFold(table, "users") {
+			regsJSON := buildRegistrationsFromSheetRow(headers, r)
+			values["registrations"] = regsJSON
 		}
 		if updatedAtIndex != -1 {
 			q := fmt.Sprintf("SELECT updated_at FROM %s WHERE %s = ?", table, pk)
@@ -1054,27 +1231,42 @@ func applyTableUpserts(database *db.Database, table, pk string, headers []string
 		args := []interface{}{}
 		updates := []string{}
 		for _, h := range headers {
-			cols = append(cols, h)
-			placeholders = append(placeholders, "?")
-			v := values[h]
-			if strings.EqualFold(h, "updated_at") {
-				args = append(args, time.Now())
+			// Map sheet header to actual DB column (case-insensitive). Skip unknown headers (e.g., flattened reg columns).
+			lower := strings.ToLower(h)
+			dbColName := ""
+			for name := range dbIndex {
+				if strings.EqualFold(name, h) {
+					dbColName = name
+					break
+				}
+			}
+			if dbColName == "" {
+				// Not a DB column: skip
 				continue
 			}
-			vtrim := strings.TrimSpace(v)
-			if vtrim == "" {
-				args = append(args, nil)
+			cols = append(cols, dbColName)
+			placeholders = append(placeholders, "?")
+			v := values[h]
+			if strings.EqualFold(dbColName, "updated_at") {
+				args = append(args, time.Now())
 			} else {
-				args = append(args, v)
+				vtrim := strings.TrimSpace(v)
+				if vtrim == "" {
+					args = append(args, nil)
+				} else {
+					args = append(args, v)
+				}
 			}
-			if h != pk {
-				updates = append(updates, fmt.Sprintf("%s = COALESCE(excluded.%s, %s)", h, h, h))
+			if !strings.EqualFold(dbColName, pk) {
+				updates = append(updates, fmt.Sprintf("%s = COALESCE(excluded.%s, %s)", dbColName, dbColName, dbColName))
 			}
+			_ = lower
 		}
 		q := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) ON CONFLICT(%s) DO UPDATE SET %s", table, strings.Join(cols, ", "), strings.Join(placeholders, ", "), pk, strings.Join(updates, ", "))
-		if _, err := tx.Exec(q, args...); err != nil {
-			log.Printf("upsert error table %s key %s: %v", table, keyVal, err)
-			continue
+		if _, execErr := tx.Exec(q, args...); execErr != nil {
+			log.Printf("upsert error table %s key %s: %v", table, keyVal, execErr)
+			failed = true
+			return nil
 		}
 	}
 	return nil
@@ -1146,28 +1338,203 @@ func a1ColumnName(n int) string {
 	return name
 }
 
-func updateOnlyMissingCells(ctx context.Context, srv *sheets.Service, spreadsheetID, sheetName string, sheetId int64, pk string, headers []string, sheetRows [][]string, dbRows [][]interface{}) error {
-	headerCount := len(headers)
-	sheetMap := map[string]int{}
-	pkIndex := -1
-	if headerCount == 0 {
-		return fmt.Errorf("no headers")
+// UpdateUsersSheetRowForEmail pushes the latest DB state for a single user to the users sheet immediately.
+// DB is treated as the source of truth; the sheet row is inserted or fully overwritten.
+func UpdateUsersSheetRowForEmail(database *db.Database, email string) error {
+	if strings.TrimSpace(email) == "" {
+		return fmt.Errorf("empty email")
 	}
-	if pk == "" {
-		pk = headers[0]
+	saJSON := os.Getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
+	if saJSON == "" {
+		return fmt.Errorf("GOOGLE_SERVICE_ACCOUNT_JSON not set")
 	}
-	for i, h := range headers {
-		if strings.EqualFold(h, pk) {
-			pkIndex = i
+	if _, err := os.Stat(saJSON); err == nil {
+		b, err := os.ReadFile(saJSON)
+		if err != nil {
+			return fmt.Errorf("failed to read service account file: %v", err)
+		}
+		saJSON = string(b)
+	}
+	spreadsheetID := os.Getenv("SPREADSHEET_ID")
+	if spreadsheetID == "" {
+		return fmt.Errorf("SPREADSHEET_ID not set")
+	}
+
+	ctx := context.Background()
+	srv, err := sheets.NewService(ctx, option.WithCredentialsJSON([]byte(saJSON)))
+	if err != nil {
+		return fmt.Errorf("failed to create sheets service: %v", err)
+	}
+	sheetName := "users"
+	sheetId, err := ensureSheetExists(ctx, srv, spreadsheetID, sheetName)
+	if err != nil {
+		return fmt.Errorf("ensure sheet failed: %v", err)
+	}
+
+	// Fetch DB rows and locate the specific user row
+	dbRows, err := queryTableRows(database, "users")
+	if err != nil || len(dbRows) == 0 {
+		return fmt.Errorf("failed to query users table: %v", err)
+	}
+	dbHeader := dbRows[0]
+	dbIndexLower := map[string]int{}
+	for i, c := range dbHeader {
+		dbIndexLower[strings.ToLower(fmt.Sprintf("%v", c))] = i
+	}
+	emailIdx, ok := dbIndexLower["email"]
+	if !ok {
+		return fmt.Errorf("users table missing email column")
+	}
+	var matched []interface{}
+	for _, row := range dbRows[1:] {
+		if emailIdx >= 0 && emailIdx < len(row) && strings.EqualFold(fmt.Sprintf("%v", row[emailIdx]), email) {
+			matched = row
 			break
 		}
 	}
-	if pkIndex == -1 {
-		pkIndex = 0
+	if matched == nil {
+		return fmt.Errorf("user not found in DB: %s", email)
 	}
+
+	// Build desired headers (DB columns + flattened registrations)
+	evs, _ := getEventDefs()
+	desiredHeaders := buildUsersHeaders(dbHeader, evs)
+
+	// Ensure header row is correct
+	hdr, sheetRows, err := readSheetRows(ctx, srv, spreadsheetID, sheetName)
+	if err != nil || len(hdr) == 0 {
+		// Initialize header only
+		hdrRow := make([]interface{}, len(desiredHeaders))
+		for i, h := range desiredHeaders {
+			hdrRow[i] = h
+		}
+		if _, err2 := srv.Spreadsheets.Values.Update(spreadsheetID, sheetName+"!A1", &sheets.ValueRange{Values: [][]interface{}{hdrRow}}).ValueInputOption("RAW").Do(); err2 != nil {
+			return fmt.Errorf("failed to initialize users header: %v", err2)
+		}
+		hdr = desiredHeaders
+		sheetRows = [][]string{}
+	} else {
+		needRewrite := len(hdr) != len(desiredHeaders)
+		if !needRewrite {
+			for i := range hdr {
+				if i >= len(desiredHeaders) || !strings.EqualFold(hdr[i], desiredHeaders[i]) {
+					needRewrite = true
+					break
+				}
+			}
+		}
+		if needRewrite {
+			hdrRow := make([]interface{}, len(desiredHeaders))
+			for i, h := range desiredHeaders {
+				hdrRow[i] = h
+			}
+			if _, err := srv.Spreadsheets.Values.Update(spreadsheetID, sheetName+"!A1", &sheets.ValueRange{Values: [][]interface{}{hdrRow}}).ValueInputOption("RAW").Do(); err != nil {
+				return fmt.Errorf("failed to rewrite users header: %v", err)
+			}
+			hdr = desiredHeaders
+		} else {
+			hdr = desiredHeaders
+		}
+	}
+
+	// Build the full row from DB according to headers
+	dbIndexLower = map[string]int{}
+	for i, c := range dbHeader {
+		dbIndexLower[strings.ToLower(fmt.Sprintf("%v", c))] = i
+	}
+	rowVals := make([]interface{}, len(hdr))
+	for ci, h := range hdr {
+		// prefer users flattened mapping
+		if val := getUsersValueForHeader(dbIndexLower, matched, h); val != "" {
+			rowVals[ci] = val
+			continue
+		}
+		if di, ok := dbIndexLower[strings.ToLower(h)]; ok && di >= 0 && di < len(matched) {
+			rowVals[ci] = fmt.Sprintf("%v", matched[di])
+		} else {
+			rowVals[ci] = ""
+		}
+	}
+
+	// Find row in sheet by email
+	pkIdx := -1
+	for i, h := range hdr {
+		if strings.EqualFold(h, "email") {
+			pkIdx = i
+			break
+		}
+	}
+	sr := -1
+	if pkIdx >= 0 {
+		for i, r := range sheetRows {
+			if pkIdx < len(r) && strings.EqualFold(strings.TrimSpace(r[pkIdx]), email) {
+				sr = i
+				break
+			}
+		}
+	}
+	if sr == -1 {
+		// append
+		vr := &sheets.ValueRange{Values: [][]interface{}{rowVals}}
+		_, err := srv.Spreadsheets.Values.Append(spreadsheetID, sheetName+"!A1", vr).ValueInputOption("RAW").InsertDataOption("INSERT_ROWS").Context(ctx).Do()
+		if err != nil {
+			return fmt.Errorf("append failed: %v", err)
+		}
+		return nil
+	}
+	// overwrite existing row in a single update range
+	lastCol := a1ColumnName(len(hdr) - 1)
+	rowNum := sr + 2
+	rng := fmt.Sprintf("%s!A%d:%s%d", sheetName, rowNum, lastCol, rowNum)
+	vr := &sheets.ValueRange{Range: rng, Values: [][]interface{}{rowVals}}
+	if _, err := srv.Spreadsheets.Values.Update(spreadsheetID, rng, vr).ValueInputOption("RAW").Context(ctx).Do(); err != nil {
+		return fmt.Errorf("row update failed: %v", err)
+	}
+	// Style: freeze header in case the sheet was new
+	_, _ = srv.Spreadsheets.BatchUpdate(spreadsheetID, &sheets.BatchUpdateSpreadsheetRequest{Requests: []*sheets.Request{{UpdateSheetProperties: &sheets.UpdateSheetPropertiesRequest{Properties: &sheets.SheetProperties{SheetId: sheetId, GridProperties: &sheets.GridProperties{FrozenRowCount: 1}}, Fields: "gridProperties.frozenRowCount"}}}}).Context(ctx).Do()
+	return nil
+}
+
+func updateOnlyMissingCells(ctx context.Context, srv *sheets.Service, spreadsheetID, sheetName string, sheetId int64, pk string, headers []string, sheetRows [][]string, dbRows [][]interface{}) error {
+	headerCount := len(headers)
+	if headerCount == 0 {
+		return fmt.Errorf("no headers")
+	}
+
+	// Build DB column name -> index map (case-insensitive)
+	if len(dbRows) == 0 {
+		return nil
+	}
+	dbHeader := dbRows[0]
+	dbIndexLower := map[string]int{}
+	for i, c := range dbHeader {
+		dbIndexLower[strings.ToLower(fmt.Sprintf("%v", c))] = i
+	}
+
+	// Determine PK name and indices in sheet (for reading) and DB (for values)
+	if pk == "" {
+		pk = headers[0]
+	}
+	pkSheetIdx := -1
+	for i, h := range headers {
+		if strings.EqualFold(h, pk) {
+			pkSheetIdx = i
+			break
+		}
+	}
+	if pkSheetIdx == -1 {
+		pkSheetIdx = 0
+	}
+	dbPkIdx := -1
+	if di, ok := dbIndexLower[strings.ToLower(pk)]; ok {
+		dbPkIdx = di
+	}
+
+	// Map sheet PK value -> sheet row index
+	sheetMap := map[string]int{}
 	for i, r := range sheetRows {
-		if pkIndex < len(r) {
-			v := strings.TrimSpace(r[pkIndex])
+		if pkSheetIdx < len(r) {
+			v := strings.TrimSpace(r[pkSheetIdx])
 			if v == "''" {
 				v = ""
 			}
@@ -1178,9 +1545,13 @@ func updateOnlyMissingCells(ctx context.Context, srv *sheets.Service, spreadshee
 	valueRanges := []*sheets.ValueRange{}
 	appendRows := [][]interface{}{}
 
-	for ri, dbRow := range dbRows[1:] {
-		pkVal := fmt.Sprintf("%v", dbRow[pkIndex])
-		if pkVal == "" {
+	// For each DB row, fill missing sheet cells by matching header names to DB columns
+	for _, dbRow := range dbRows[1:] {
+		var pkVal string
+		if dbPkIdx >= 0 && dbPkIdx < len(dbRow) {
+			pkVal = fmt.Sprintf("%v", dbRow[dbPkIdx])
+		}
+		if strings.TrimSpace(pkVal) == "" {
 			continue
 		}
 		if sr, exists := sheetMap[pkVal]; exists {
@@ -1189,66 +1560,189 @@ func updateOnlyMissingCells(ctx context.Context, srv *sheets.Service, spreadshee
 				if ci < len(sheetRows[sr]) {
 					sheetVal = sheetRows[sr][ci]
 				}
+				// Find the DB column index for this header
+				h := headers[ci]
+				di, ok := dbIndexLower[strings.ToLower(h)]
 				dbVal := ""
-				if ci < len(dbRow) {
-					dbVal = fmt.Sprintf("%v", dbRow[ci])
-				}
-				writeVal := dbVal
-				if dbVal == "" {
-					writeVal = ""
+				if ok && di >= 0 && di < len(dbRow) {
+					dbVal = fmt.Sprintf("%v", dbRow[di])
 				}
 				if sheetVal == "" {
 					col := a1ColumnName(ci)
 					rowNum := sr + 2
 					rng := fmt.Sprintf("%s!%s%d", sheetName, col, rowNum)
-					vr := &sheets.ValueRange{Range: rng, Values: [][]interface{}{{writeVal}}}
+					vr := &sheets.ValueRange{Range: rng, Values: [][]interface{}{{dbVal}}}
 					valueRanges = append(valueRanges, vr)
 				}
 			}
 		} else {
+			// Append a new row, mapping by header name to DB values
 			newRow := make([]interface{}, headerCount)
 			for ci := 0; ci < headerCount; ci++ {
-				if ci < len(dbRow) {
-					dv := fmt.Sprintf("%v", dbRow[ci])
-					if dv == "" {
-						newRow[ci] = ""
-					} else {
-						newRow[ci] = dv
-					}
+				h := headers[ci]
+				if di, ok := dbIndexLower[strings.ToLower(h)]; ok && di >= 0 && di < len(dbRow) {
+					dv := fmt.Sprintf("%v", dbRow[di])
+					newRow[ci] = dv
 				} else {
-					newRow[ci] = ""
+					// Try users flattened registration columns
+					if strings.EqualFold(pk, "email") {
+						val := getUsersValueForHeader(dbIndexLower, dbRow, h)
+						newRow[ci] = val
+					} else {
+						newRow[ci] = ""
+					}
 				}
 			}
 			appendRows = append(appendRows, newRow)
 		}
-		_ = ri
 	}
 
 	if len(valueRanges) > 0 {
-		for _, vr := range valueRanges {
-			_, _ = srv.Spreadsheets.Values.Update(spreadsheetID, vr.Range, vr).ValueInputOption("RAW").Context(ctx).Do()
-		}
+		// Use a single BatchUpdate to reduce write requests
+		_, _ = srv.Spreadsheets.Values.BatchUpdate(spreadsheetID, &sheets.BatchUpdateValuesRequest{
+			ValueInputOption: "RAW",
+			Data:             valueRanges,
+		}).Context(ctx).Do()
 	}
 	if len(appendRows) > 0 {
 		appendVR := &sheets.ValueRange{Values: appendRows}
 		_, _ = srv.Spreadsheets.Values.Append(spreadsheetID, sheetName+"!A1", appendVR).ValueInputOption("RAW").InsertDataOption("INSERT_ROWS").Context(ctx).Do()
 	}
 
-	dbCount := len(dbRows) - 1
-	sheetCount := len(sheetRows)
-	if sheetCount > dbCount {
-		start := dbCount + 1
-		end := sheetCount
-		deleteReq := &sheets.DeleteDimensionRequest{
-			Range: &sheets.DimensionRange{
-				SheetId:    sheetId,
-				Dimension:  "ROWS",
-				StartIndex: int64(start + 1),
-				EndIndex:   int64(end + 1),
-			},
-		}
-		batch := &sheets.BatchUpdateSpreadsheetRequest{Requests: []*sheets.Request{{DeleteDimension: deleteReq}}}
-		_, _ = srv.Spreadsheets.BatchUpdate(spreadsheetID, batch).Context(ctx).Do()
-	}
+	// Do NOT delete extra sheet rows; allow admins to add users in the sheet which will be upserted into DB.
 	return nil
+}
+
+// --- Sheets webhook (Apps Script) ---> DB updater ---
+
+type sheetsRowUpdatePayload struct {
+	Sheet   string   `json:"sheet"`
+	PK      string   `json:"pk"`
+	PKValue string   `json:"pk_value"`
+	Headers []string `json:"headers"`
+	Row     []string `json:"row"`
+}
+
+// SheetsRowUpdate receives a single-row update from Google Apps Script and applies it to the DB.
+// Auth: header Authorization: Bearer <SHEETS_WEBHOOK_SECRET>
+func SheetsRowUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Optional auth: if SHEETS_WEBHOOK_SECRET is set, require matching Bearer token.
+	// If not set, allow public access (use with caution).
+	if secret := strings.TrimSpace(os.Getenv("SHEETS_WEBHOOK_SECRET")); secret != "" {
+		auth := strings.TrimSpace(r.Header.Get("Authorization"))
+		const prefix = "Bearer "
+		if !strings.HasPrefix(strings.ToLower(auth), strings.ToLower(prefix)) || strings.TrimSpace(auth[len(prefix):]) != secret {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+	var payload sheetsRowUpdatePayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(payload.Sheet) == "" || len(payload.Headers) == 0 || len(payload.Row) == 0 {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	if globalDB == nil {
+		http.Error(w, "db not ready", http.StatusServiceUnavailable)
+		return
+	}
+	// Only allow users sheet for now
+	sheet := strings.ToLower(strings.TrimSpace(payload.Sheet))
+	if sheet != "users" {
+		http.Error(w, "unsupported sheet", http.StatusBadRequest)
+		return
+	}
+	pk := payload.PK
+	if pk == "" {
+		pk = "email"
+	}
+	// Ensure row is same length as headers
+	row := payload.Row
+	if len(row) < len(payload.Headers) {
+		padded := make([]string, len(payload.Headers))
+		copy(padded, row)
+		row = padded
+	} else if len(row) > len(payload.Headers) {
+		row = row[:len(payload.Headers)]
+	}
+	// Apply in a critical section shared with the periodic sync
+	sheetsOpMu.Lock()
+	defer sheetsOpMu.Unlock()
+	if err := applyTableUpserts(globalDB, sheet, pk, payload.Headers, [][]string{row}, nil); err != nil {
+		log.Printf("sheets webhook upsert error: %v", err)
+		http.Error(w, "upsert failed", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
+}
+
+// SheetsHeaders returns the expected header row for a given sheet (currently only users),
+// so the Apps Script can initialize the sheet correctly.
+// Auth: Authorization: Bearer <SHEETS_WEBHOOK_SECRET>
+func SheetsHeaders(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Optional auth
+	if secret := strings.TrimSpace(os.Getenv("SHEETS_WEBHOOK_SECRET")); secret != "" {
+		auth := strings.TrimSpace(r.Header.Get("Authorization"))
+		const prefix = "Bearer "
+		if !strings.HasPrefix(strings.ToLower(auth), strings.ToLower(prefix)) || strings.TrimSpace(auth[len(prefix):]) != secret {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+	if globalDB == nil {
+		http.Error(w, "db not ready", http.StatusServiceUnavailable)
+		return
+	}
+	sheet := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("sheet")))
+	if sheet == "" {
+		sheet = "users"
+	}
+	if sheet != "users" {
+		http.Error(w, "unsupported sheet", http.StatusBadRequest)
+		return
+	}
+	// Build users headers from DB columns + events
+	dbRows, err := queryTableRows(globalDB, "users")
+	if err != nil || len(dbRows) == 0 {
+		http.Error(w, "failed to inspect users table", http.StatusInternalServerError)
+		return
+	}
+	evs, _ := getEventDefs()
+	headers := buildUsersHeaders(dbRows[0], evs)
+	resp := map[string]interface{}{
+		"sheet":   sheet,
+		"pk":      "email",
+		"headers": headers,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// SheetsPing: simple auth-checked endpoint for Apps Script setup testing
+func SheetsPing(w http.ResponseWriter, r *http.Request) {
+	// Optional auth
+	if secret := strings.TrimSpace(os.Getenv("SHEETS_WEBHOOK_SECRET")); secret != "" {
+		auth := strings.TrimSpace(r.Header.Get("Authorization"))
+		const prefix = "Bearer "
+		if !strings.HasPrefix(strings.ToLower(auth), strings.ToLower(prefix)) || strings.TrimSpace(auth[len(prefix):]) != secret {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }

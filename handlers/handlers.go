@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"regexp"
@@ -311,57 +312,31 @@ func GetEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if ev, err := globalDB.Get("events", eventID); err == nil && ev != nil {
-		if dbEv, ok := ev.(*db.Event); ok {
-			foundEvent := map[string]interface{}{
-				"id":                dbEv.ID,
-				"name":              dbEv.Name,
-				"image":             dbEv.Image,
-				"slug":              dbEv.ID,
-				"description_short": dbEv.DescriptionShort,
-				"description_long":  dbEv.DescriptionLong,
-				"participants":      dbEv.Participants,
-				"mode":              dbEv.Mode,
-				"points":            dbEv.Points,
-				"individual":        dbEv.IndependentRegistration,
-				"eligibility":       dbEv.Eligibility,
-				"open_to_all":       dbEv.OpenToAll,
-				"dates":             dbEv.Dates,
-			}
-			response := Response{Status: "success", Message: "Event retrieved successfully", Data: foundEvent}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(response)
-			return
-		}
-	}
-
-	all, err := globalDB.GetAll("events")
+	// Always read from JSON-backed events
+	events, err := GetAllEventsData()
 	if err == nil {
-		for _, item := range all {
-			if dbEv, ok := item.(*db.Event); ok {
-				if dbEv.ID == eventID || slugify(dbEv.Name) == eventID {
-					foundEvent := map[string]interface{}{
-						"id":                dbEv.ID,
-						"name":              dbEv.Name,
-						"image":             dbEv.Image,
-						"slug":              dbEv.ID,
-						"description_short": dbEv.DescriptionShort,
-						"description_long":  dbEv.DescriptionLong,
-						"participants":      dbEv.Participants,
-						"mode":              dbEv.Mode,
-						"points":            dbEv.Points,
-						"individual":        dbEv.IndependentRegistration,
-						"eligibility":       dbEv.Eligibility,
-						"open_to_all":       dbEv.OpenToAll,
-						"dates":             dbEv.Dates,
-					}
-					response := Response{Status: "success", Message: "Event retrieved successfully", Data: foundEvent}
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusOK)
-					json.NewEncoder(w).Encode(response)
-					return
+		for _, dbEv := range events {
+			if dbEv.ID == eventID || slugify(dbEv.Name) == eventID {
+				foundEvent := map[string]interface{}{
+					"id":                dbEv.ID,
+					"name":              dbEv.Name,
+					"image":             dbEv.Image,
+					"slug":              dbEv.ID,
+					"description_short": dbEv.DescriptionShort,
+					"description_long":  dbEv.DescriptionLong,
+					"participants":      dbEv.Participants,
+					"mode":              dbEv.Mode,
+					"points":            dbEv.Points,
+					"individual":        dbEv.IndependentRegistration,
+					"eligibility":       dbEv.Eligibility,
+					"open_to_all":       dbEv.OpenToAll,
+					"dates":             dbEv.Dates,
 				}
+				response := Response{Status: "success", Message: "Event retrieved successfully", Data: foundEvent}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(response)
+				return
 			}
 		}
 	}
@@ -380,15 +355,134 @@ func SetGlobalDB(database *db.Database) {
 }
 
 func GetAllEventsData() ([]db.Event, error) {
-	events := []db.Event{}
-	all, err := globalDB.GetAll("events")
+	// Always load events from JSON; do not rely on DB events table.
+	b, err := os.ReadFile("frontend/data/events.json")
 	if err != nil {
+		if b2, err2 := os.ReadFile("data/events.json"); err2 == nil {
+			b = b2
+		} else {
+			return nil, err
+		}
+	}
+	// Parse a subset of fields to db.Event list
+	var raw struct {
+		Events  map[string]string `json:"events"`
+		Default struct {
+			OpenToAll    bool   `json:"open_to_all"`
+			Eligibility  []int  `json:"eligibility"`
+			Participants int    `json:"participants"`
+			Mode         string `json:"mode"`
+			Descriptions struct {
+				Long  string `json:"long"`
+				Short string `json:"short"`
+			} `json:"descriptions"`
+			IndependentRegistrations bool   `json:"independent_registrations"`
+			Points                   int    `json:"points"`
+			Dates                    string `json:"dates"`
+		} `json:"default"`
+		Descriptions map[string]struct {
+			Long  string `json:"long"`
+			Short string `json:"short"`
+		} `json:"descriptions"`
+		Participants map[string]int    `json:"participants"`
+		Mode         map[string]string `json:"mode"`
+		Points       map[string]int    `json:"points"`
+		Individual   map[string]bool   `json:"individual"`
+		Eligibility  map[string][]int  `json:"eligibility"`
+		OpenToAll    map[string]bool   `json:"open_to_all"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
 		return nil, err
 	}
-	for _, item := range all {
-		if ev, ok := item.(*db.Event); ok {
-			events = append(events, *ev)
+	events := make([]db.Event, 0, len(raw.Events))
+	// Preserve order: iterate the JSON again to keep declared order
+	dec := json.NewDecoder(strings.NewReader(string(b)))
+	var ordered []string
+	if tok, err := dec.Token(); err == nil {
+		for dec.More() {
+			k, _ := dec.Token()
+			key, _ := k.(string)
+			if key == "events" {
+				// open object
+				_, _ = dec.Token()
+				for dec.More() {
+					kn, _ := dec.Token()
+					name, _ := kn.(string)
+					var skip string
+					_ = dec.Decode(&skip)
+					ordered = append(ordered, name)
+				}
+				_, _ = dec.Token()
+				break
+			} else {
+				var skip interface{}
+				_ = dec.Decode(&skip)
+			}
 		}
+		_ = tok
+	}
+	if len(ordered) == 0 {
+		for name := range raw.Events {
+			ordered = append(ordered, name)
+		}
+	}
+	now := time.Now()
+	for _, name := range ordered {
+		slug := slugify(name)
+		participants := raw.Default.Participants
+		if v, ok := raw.Participants[name]; ok {
+			participants = v
+		}
+		mode := raw.Default.Mode
+		if v, ok := raw.Mode[name]; ok {
+			mode = v
+		}
+		points := raw.Default.Points
+		if v, ok := raw.Points[name]; ok {
+			points = v
+		}
+		individual := raw.Default.IndependentRegistrations
+		if v, ok := raw.Individual[name]; ok {
+			individual = v
+		}
+		descShort := raw.Default.Descriptions.Short
+		descLong := raw.Default.Descriptions.Long
+		if v, ok := raw.Descriptions[name]; ok {
+			if v.Short != "" {
+				descShort = v.Short
+			}
+			if v.Long != "" {
+				descLong = v.Long
+			}
+		}
+		openAll := raw.Default.OpenToAll
+		if v, ok := raw.OpenToAll[name]; ok {
+			openAll = v
+		}
+		eligibility := ""
+		if openAll {
+			eligibility = "Open to all"
+		} else if vals, ok := raw.Eligibility[name]; ok && len(vals) >= 2 {
+			eligibility = fmt.Sprintf("Grades %d–%d", vals[0], vals[1])
+		} else if len(raw.Default.Eligibility) >= 2 {
+			eligibility = fmt.Sprintf("Grades %d–%d", raw.Default.Eligibility[0], raw.Default.Eligibility[1])
+		}
+		events = append(events, db.Event{
+			ID:                      slug,
+			Name:                    name,
+			Image:                   raw.Events[name],
+			OpenToAll:               openAll,
+			Eligibility:             eligibility,
+			Participants:            participants,
+			Mode:                    mode,
+			IndependentRegistration: individual,
+			Points:                  points,
+			Dates:                   raw.Default.Dates,
+			DescriptionLong:         descLong,
+			DescriptionShort:        descShort,
+			CreatedAt:               now,
+			UpdatedAt:               now,
+		})
 	}
 	return events, nil
 }
