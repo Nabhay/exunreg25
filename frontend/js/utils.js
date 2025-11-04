@@ -175,11 +175,13 @@ function formatParticipants(count) {
 }
 
 function formatEligibility(eligibility, openToAll) {
-    if (openToAll) return 'Open to All';
-    if (eligibility && eligibility.length === 2) {
-        return `${eligibility[0]}th - ${eligibility[1]}th`;
-    }
-    return 'All Classes';
+    if (openToAll) return 'Open to All'
+    if (!eligibility) return 'All Classes'
+    const nums = (String(eligibility).match(/\d+/g) || []).map(n => n.trim())
+    if (nums.length >= 2) return `${nums[0]}th - ${nums[nums.length - 1]}th`
+    if (nums.length === 1) return `${nums[0]}th`
+    const clean = String(eligibility).trim()
+    return clean === '' ? 'All Classes' : clean
 }
 
 function escapeHtml(str) {
