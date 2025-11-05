@@ -33,7 +33,7 @@ func NewEmailService(config *EmailConfig) *EmailService {
 }
 
 func (es *EmailService) SendOTP(to, otp, schoolCode string) error {
-	subject := fmt.Sprintf("Exun Registration Permament Authentication Code - %s", otp)
+	subject := fmt.Sprintf("Exun Registration Permanent Authentication Code - %s", otp)
 
 	htmlBody, err := es.renderOTPTemplate(otp, schoolCode)
 	if err != nil {
