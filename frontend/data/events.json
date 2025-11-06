@@ -168,8 +168,8 @@
         "Competitive Programming": 25,
         "Sudocrypt": 35,
         "Turing Test": 20,
-        "Quiz": 30,
-        "Crossword": 30,
+        "Quiz": 25,
+        "Crossword": 25,
         "Hardware": 30,
         "Girls In Tech": 20,
         "Group Discussion": 25,
@@ -180,8 +180,8 @@
         "CubXL 2x2": 10,
         "CubXL 3x3": 15,
         "CubXL Pyraminx": 10,
-        "Roboknights: Robosoccer": 20,
-        "Roboknights: Line Following Robot": 15
+        "Roboknights: Robosoccer": 15,
+        "Roboknights: Line Following Robot": 20
     },
     "individual" : {
         "Build: Hackathon": false,
