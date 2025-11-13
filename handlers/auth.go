@@ -166,9 +166,24 @@ func (ah *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	userIface, err := ah.db.Get("users", req.Email)
 	if err != nil || userIface == nil {
-		response := Response{Status: "error", Error: "User not found"}
+		user := &db.User{
+			Username:      req.Email,
+			Email:         req.Email,
+			PasswordHash:  ah.hashPassword(req.NewPassword),
+			Registrations: make(map[string][]db.Participant),
+			CreatedAt:     time.Now(),
+			UpdatedAt:     time.Now(),
+		}
+		if cerr := ah.db.Create("users", user); cerr != nil {
+			response := Response{Status: "error", Error: "Failed to create user"}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+		response := Response{Status: "success", Message: "Password reset successful"}
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
+		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(response)
 		return
 	}
@@ -271,17 +286,6 @@ func (ah *AuthHandler) SendOTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		placeholder := &db.User{
-			Username:      req.Email,
-			Email:         req.Email,
-			PasswordHash:  "",
-			SchoolCode:    otp,
-			Registrations: make(map[string][]db.Participant),
-			CreatedAt:     time.Now(),
-			UpdatedAt:     time.Now(),
-		}
-		_ = ah.db.Create("users", placeholder)
-
 		response := Response{
 			Status:  "success",
 			Message: "OTP sent successfully",
@@ -348,42 +352,16 @@ func (ah *AuthHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 	})
 
 	user, err := ah.db.Get("users", req.Email)
-	if err != nil {
-		placeholder := &db.User{
-			Username:      req.Email,
-			Email:         req.Email,
-			PasswordHash:  "",
-			SchoolCode:    expectedOTP,
-			Registrations: make(map[string][]db.Participant),
-			CreatedAt:     time.Now(),
-			UpdatedAt:     time.Now(),
-		}
-		if cerr := ah.db.Create("users", placeholder); cerr != nil {
-			fmt.Printf("failed to create placeholder user for %s: %v\n", req.Email, cerr)
-		} else {
-			user = placeholder
-		}
-	}
-
-	if user != nil {
-		u := user.(*db.User)
-		if u.SchoolCode == "" {
-			u.SchoolCode = expectedOTP
-			u.UpdatedAt = time.Now()
-			_ = ah.db.Update("users", req.Email, u)
-		}
-	}
-
 	needsComplete := false
-	if user != nil {
+	if err != nil || user == nil {
+		needsComplete = true
+	} else {
 		u := user.(*db.User)
 		if strings.TrimSpace(u.Username) == "" || strings.TrimSpace(u.Fullname) == "" || len(strings.TrimSpace(u.PhoneNumber)) != 10 {
 			needsComplete = true
 		} else if !u.Individual && strings.TrimSpace(u.PrincipalsEmail) == "" {
 			needsComplete = true
 		}
-	} else {
-		needsComplete = true
 	}
 
 	response := Response{
@@ -501,14 +479,37 @@ func (ah *AuthHandler) CompleteSignup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if signupData.Password == "" {
+		response := Response{
+			Status: "error",
+			Error:  "Password is required",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	if len(signupData.Password) < 8 {
+		response := Response{
+			Status: "error",
+			Error:  "Password must be at least 8 characters",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
 	existing, err := ah.db.Get("users", email)
 	if err != nil {
 		user := &db.User{
-			Username:     signupData.Username,
-			Email:        email,
-			PasswordHash: "",
-			CreatedAt:    time.Now(),
-			UpdatedAt:    time.Now(),
+			Username:      signupData.Username,
+			Email:         email,
+			PasswordHash:  ah.hashPassword(signupData.Password),
+			Registrations: make(map[string][]db.Participant),
+			CreatedAt:     time.Now(),
+			UpdatedAt:     time.Now(),
 		}
 		if err := ah.db.Create("users", user); err != nil {
 			fmt.Printf("Create user error: %v\n", err)
