@@ -130,13 +130,16 @@
         "Group Discussion": 1,
         "ExML": 2,
         "DomainSquare+ Gaming: PC": 2,
-        "DomainSquare+ Gaming: Surprise": 1,
+        "DomainSquare+ Gaming: Surprise": 2,
         "DomainSquare+ Gaming: Showdown!": 1,
         "CubXL 2x2": 1,
         "CubXL 3x3": 1,
         "CubXL Pyraminx": 1,
         "Roboknights: Robosoccer": 3,
         "Roboknights: Line Following Robot": 3
+    },
+    "display_participants": {
+        "DomainSquare+ Gaming: Surprise": "2 teams of 1"
     },
     "mode":
     {
@@ -197,7 +200,7 @@
         "Group Discussion": false,
         "ExML": true,
         "DomainSquare+ Gaming: PC": false,
-        "DomainSquare+ Gaming: Surprise": false,
+    "DomainSquare+ Gaming: Surprise": true,
         "DomainSquare+ Gaming: Showdown!": false,
         "CubXL 2x2": false,
         "CubXL 3x3": false,

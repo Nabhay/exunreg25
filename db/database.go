@@ -91,6 +91,7 @@ type Event struct {
 	OpenToAll               bool      `json:"open_to_all"`
 	Eligibility             string    `json:"eligibility"`
 	Participants            int       `json:"participants"`
+	DisplayParticipants     string    `json:"display_participants"`
 	Mode                    string    `json:"mode"`
 	IndependentRegistration bool      `json:"independent_registration"`
 	Points                  int       `json:"points"`

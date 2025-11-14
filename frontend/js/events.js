@@ -161,7 +161,7 @@ class EventsPage {
 
     const imageUrl = event.image ? event.image : '/assets/exun_base.webp';
         const eligibilityText = Utils.formatEligibility(event.eligibility, event.open_to_all);
-        const participantsText = Utils.formatParticipants(event.participants);
+    const participantsText = event.display_participants ? event.display_participants : Utils.formatParticipants(event.participants);
         const modeText = Utils.formatEventMode(event.mode);
 
         card.innerHTML = `

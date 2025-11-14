@@ -57,7 +57,7 @@
                             </div>
                             <div class="event-info-item">
                                 <span class="event-info-label">Participants:</span>
-                                <span class="event-info-value">{{.Event.Participants}}</span>
+                                <span class="event-info-value">{{if .Event.DisplayParticipants}}{{.Event.DisplayParticipants}}{{else}}{{.Event.Participants}}{{end}}</span>
                             </div>
                             <div class="event-info-item">
                                 <span class="event-info-label">Eligibility:</span>

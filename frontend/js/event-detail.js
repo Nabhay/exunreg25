@@ -75,8 +75,9 @@ class EventDetailPage {
     renderEventDetails() {
         const details = document.getElementById('event-info');
         if (!details) return;
-    const eligibilityText = Utils.formatEligibility(this.event.eligibility, this.event.open_to_all);
+        const eligibilityText = Utils.formatEligibility(this.event.eligibility, this.event.open_to_all);
     const registrationType = this.event.individual ? 'Individual' : 'Team';
+    const participantsDisplay = this.event.display_participants ? this.event.display_participants : (this.event.participants || 'TBA');
 
         details.innerHTML = `
             <div class="event-info-item">
@@ -85,7 +86,7 @@ class EventDetailPage {
             </div>
             <div class="event-info-item">
                 <span class="event-info-label">Participants:</span>
-                <span class="event-info-value">${this.event.participants || 'TBA'}</span>
+                <span class="event-info-value">${participantsDisplay}</span>
             </div>
             <div class="event-info-item">
                 <span class="event-info-label">Eligibility:</span>

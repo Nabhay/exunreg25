@@ -270,20 +270,21 @@ func GetAllEvents(w http.ResponseWriter, r *http.Request) {
 	events := []map[string]interface{}{}
 	for _, ev := range eventsList {
 		event := map[string]interface{}{
-			"id":                ev.ID,
-			"name":              ev.Name,
-			"image":             ev.Image,
-			"slug":              ev.ID,
-			"description_short": ev.DescriptionShort,
-			"description_long":  ev.DescriptionLong,
-			"participants":      ev.Participants,
-			"mode":              ev.Mode,
-			"points":            ev.Points,
-			"individual":        ev.IndependentRegistration,
-			"eligibility":       ev.Eligibility,
-			"open_to_all":       ev.OpenToAll,
-			"dates":             ev.Dates,
-			"registrations":     regCounts[ev.ID],
+			"id":                   ev.ID,
+			"name":                 ev.Name,
+			"image":                ev.Image,
+			"slug":                 ev.ID,
+			"description_short":    ev.DescriptionShort,
+			"description_long":     ev.DescriptionLong,
+			"participants":         ev.Participants,
+			"display_participants": ev.DisplayParticipants,
+			"mode":                 ev.Mode,
+			"points":               ev.Points,
+			"individual":           ev.IndependentRegistration,
+			"eligibility":          ev.Eligibility,
+			"open_to_all":          ev.OpenToAll,
+			"dates":                ev.Dates,
+			"registrations":        regCounts[ev.ID],
 		}
 		events = append(events, event)
 	}
@@ -318,19 +319,20 @@ func GetEvent(w http.ResponseWriter, r *http.Request) {
 		for _, dbEv := range events {
 			if dbEv.ID == eventID || slugify(dbEv.Name) == eventID {
 				foundEvent := map[string]interface{}{
-					"id":                dbEv.ID,
-					"name":              dbEv.Name,
-					"image":             dbEv.Image,
-					"slug":              dbEv.ID,
-					"description_short": dbEv.DescriptionShort,
-					"description_long":  dbEv.DescriptionLong,
-					"participants":      dbEv.Participants,
-					"mode":              dbEv.Mode,
-					"points":            dbEv.Points,
-					"individual":        dbEv.IndependentRegistration,
-					"eligibility":       dbEv.Eligibility,
-					"open_to_all":       dbEv.OpenToAll,
-					"dates":             dbEv.Dates,
+					"id":                   dbEv.ID,
+					"name":                 dbEv.Name,
+					"image":                dbEv.Image,
+					"slug":                 dbEv.ID,
+					"description_short":    dbEv.DescriptionShort,
+					"description_long":     dbEv.DescriptionLong,
+					"participants":         dbEv.Participants,
+					"display_participants": dbEv.DisplayParticipants,
+					"mode":                 dbEv.Mode,
+					"points":               dbEv.Points,
+					"individual":           dbEv.IndependentRegistration,
+					"eligibility":          dbEv.Eligibility,
+					"open_to_all":          dbEv.OpenToAll,
+					"dates":                dbEv.Dates,
 				}
 				response := Response{Status: "success", Message: "Event retrieved successfully", Data: foundEvent}
 				w.Header().Set("Content-Type", "application/json")
@@ -388,6 +390,7 @@ func GetAllEventsData() ([]db.Event, error) {
 		Mode         map[string]string `json:"mode"`
 		Points       map[string]int    `json:"points"`
 		Individual   map[string]bool   `json:"individual"`
+		Display      map[string]string `json:"display_participants"`
 		Eligibility  map[string][]int  `json:"eligibility"`
 		OpenToAll    map[string]bool   `json:"open_to_all"`
 	}
@@ -467,6 +470,12 @@ func GetAllEventsData() ([]db.Event, error) {
 		} else if len(raw.Default.Eligibility) >= 2 {
 			eligibility = fmt.Sprintf("Grades %d–%d", raw.Default.Eligibility[0], raw.Default.Eligibility[1])
 		}
+		// lookup custom display participants text if present
+		disp := ""
+		if v, ok := raw.Display[name]; ok {
+			disp = v
+		}
+
 		events = append(events, db.Event{
 			ID:                      slug,
 			Name:                    name,
@@ -474,6 +483,7 @@ func GetAllEventsData() ([]db.Event, error) {
 			OpenToAll:               openAll,
 			Eligibility:             eligibility,
 			Participants:            participants,
+			DisplayParticipants:     disp,
 			Mode:                    mode,
 			IndependentRegistration: individual,
 			Points:                  points,

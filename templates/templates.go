@@ -62,20 +62,21 @@ type Summary struct {
 }
 
 type Event struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	Slug             string `json:"slug"`
-	DescriptionShort string `json:"description_short"`
-	DescriptionLong  string `json:"description_long"`
-	EligibilityText  string `json:"eligibility_text"`
-	Mode             string `json:"mode"`
-	Image            string `json:"image"`
-	Participants     int    `json:"participants"`
-	MaxParticipants  int    `json:"max_participants"`
-	IsRegistered     bool   `json:"is_registered"`
-	Points           int    `json:"points"`
-	Individual       bool   `json:"individual"`
-	Dates            string `json:"dates"`
+	ID                  string `json:"id"`
+	Name                string `json:"name"`
+	Slug                string `json:"slug"`
+	DescriptionShort    string `json:"description_short"`
+	DescriptionLong     string `json:"description_long"`
+	EligibilityText     string `json:"eligibility_text"`
+	Mode                string `json:"mode"`
+	Image               string `json:"image"`
+	Participants        int    `json:"participants"`
+	DisplayParticipants string `json:"display_participants"`
+	MaxParticipants     int    `json:"max_participants"`
+	IsRegistered        bool   `json:"is_registered"`
+	Points              int    `json:"points"`
+	Individual          bool   `json:"individual"`
+	Dates               string `json:"dates"`
 }
 
 type AdminStats struct {
@@ -151,21 +152,26 @@ func LoadEventsFromJSON() ([]Event, error) {
 		if !strings.HasPrefix(img, "/") {
 			img = "/illustrations/" + img
 		}
+		displayParticipants := ""
+		if ev.Name == "DomainSquare+ Gaming: Surprise" {
+			displayParticipants = "2 teams of 1"
+		}
 		events = append(events, Event{
-			ID:               ev.ID,
-			Name:             ev.Name,
-			Slug:             ev.ID,
-			Image:            img,
-			Mode:             ev.Mode,
-			Participants:     ev.Participants,
-			MaxParticipants:  0,
-			IsRegistered:     false,
-			DescriptionShort: ev.DescriptionShort,
-			DescriptionLong:  ev.DescriptionLong,
-			EligibilityText:  ev.Eligibility,
-			Points:           ev.Points,
-			Individual:       ev.IndependentRegistration,
-			Dates:            ev.Dates,
+			ID:                  ev.ID,
+			Name:                ev.Name,
+			Slug:                ev.ID,
+			Image:               img,
+			Mode:                ev.Mode,
+			Participants:        ev.Participants,
+			DisplayParticipants: displayParticipants,
+			MaxParticipants:     0,
+			IsRegistered:        false,
+			DescriptionShort:    ev.DescriptionShort,
+			DescriptionLong:     ev.DescriptionLong,
+			EligibilityText:     ev.Eligibility,
+			Points:              ev.Points,
+			Individual:          ev.IndependentRegistration,
+			Dates:               ev.Dates,
 		})
 	}
 
