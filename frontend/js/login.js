@@ -36,6 +36,14 @@ constructor() {
             });
         }
 
+        const forgotLink = document.getElementById('forgot-password');
+        if (forgotLink) {
+            forgotLink.addEventListener('click', (e) => {
+                e.preventDefault();
+                this.handleForgotPassword();
+            });
+        }
+
         this.setupOTPInputs();
         this.setupResendOTP();
     }
@@ -192,6 +200,8 @@ constructor() {
                 method: 'POST',
                 body: JSON.stringify({ email: this.currentEmail, otp })
             });
+
+            this.lastOTP = otp;
             
             if (response.status === 'success') {
                 const otpToken = (response.data && response.data.token) || response.token || null;
@@ -203,8 +213,13 @@ constructor() {
                     Utils.showToast('OTP verified! Set a password to complete registration', 'success');
                     this.showSetPasswordForm();
                 } else {
-                    Utils.showToast('Login successful!', 'success');
-                    setTimeout(() => window.location.href = '/summary', 1000);
+                    if (this.authMode === 'reset') {
+                        Utils.showToast('OTP verified! Set a new password', 'success');
+                        this.showSetPasswordForm();
+                    } else {
+                        Utils.showToast('Login successful!', 'success');
+                        setTimeout(() => window.location.href = '/summary', 1000);
+                    }
                 }
             } else {
                 throw new Error(response.error || 'Invalid OTP');
@@ -238,12 +253,22 @@ constructor() {
             return;
         }
         try {
-            const response = await ExunServices.api.apiRequest('/auth/complete', { method: 'POST', body: JSON.stringify({ username: this.currentEmail, password: pwd }) });
-            if (response.status === 'success') {
-                Utils.showToast('Signup complete. Redirecting to profile completion...', 'success');
-                setTimeout(() => window.location.href = '/complete', 800);
+            if (this.authMode === 'reset') {
+                const response = await ExunServices.api.apiRequest('/auth/reset-password', { method: 'POST', body: JSON.stringify({ email: this.currentEmail, otp: this.lastOTP, new_password: pwd }) });
+                if (response.status === 'success') {
+                    Utils.showToast('Password reset successful. Redirecting to login...', 'success');
+                    setTimeout(() => window.location.href = '/login', 800);
+                } else {
+                    Utils.showToast(response.error || 'Failed to reset password', 'error');
+                }
             } else {
-                Utils.showToast(response.error || 'Failed to set password', 'error');
+                const response = await ExunServices.api.apiRequest('/auth/complete', { method: 'POST', body: JSON.stringify({ username: this.currentEmail, password: pwd }) });
+                if (response.status === 'success') {
+                    Utils.showToast('Signup complete. Redirecting to profile completion...', 'success');
+                    setTimeout(() => window.location.href = '/complete', 800);
+                } else {
+                    Utils.showToast(response.error || 'Failed to set password', 'error');
+                }
             }
         } catch (err) {
             Utils.showToast(err.message || 'Failed to set password', 'error');
@@ -255,7 +280,12 @@ constructor() {
         Utils.setLoading(resendLink, true);
         
         try {
-            const response = await ExunServices.auth.sendOTP(this.currentEmail);
+            let response;
+            if (this.authMode === 'reset') {
+                response = await ExunServices.auth.sendResetOTP(this.currentEmail);
+            } else {
+                response = await ExunServices.auth.sendOTP(this.currentEmail);
+            }
             if (response.success) {
                 Utils.showToast('New OTP sent to your email', 'success');
                 this.startResendTimer();
@@ -276,6 +306,27 @@ constructor() {
             Utils.showToast(error.message || 'Failed to resend OTP', 'error');
         } finally {
             Utils.setLoading(resendLink, false);
+        }
+    }
+
+    async handleForgotPassword() {
+        const emailEl = document.getElementById('email');
+        const email = (emailEl && emailEl.value) ? emailEl.value.trim() : '';
+        if (!this.validateEmail(email)) {
+            this.showFieldError('email', 'Please enter a valid email address');
+            return;
+        }
+        const resp = await ExunServices.auth.sendResetOTP(email);
+        if (resp.success) {
+            this.currentEmail = email;
+            this.authMode = 'reset';
+            this.showOTPForm();
+            Utils.showToast(resp.message || 'OTP sent to your email', 'success');
+            this.startResendTimer();
+        } else if (resp.type === 'user_not_found') {
+            Utils.showToast(resp.message || 'No account found with this email', 'error');
+        } else {
+            Utils.showToast(resp.message || 'Failed to send OTP', 'error');
         }
     }
 

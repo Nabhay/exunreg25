@@ -368,6 +368,7 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("/oauth2callback", handlers.HandleOAuth2Callback)
 
 	mux.HandleFunc("/api/auth/send-otp", handlers.SendOTP)
+	mux.HandleFunc("/api/auth/send-reset-otp", handlers.SendResetOTP)
 	mux.HandleFunc("/api/auth/verify-otp", handlers.VerifyOTP)
 	mux.HandleFunc("/api/auth/logout", handlers.Logout)
 	mux.HandleFunc("/api/auth/complete", handlers.CompleteSignup)

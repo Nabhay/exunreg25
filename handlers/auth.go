@@ -301,6 +301,53 @@ func (ah *AuthHandler) SendOTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (ah *AuthHandler) SendResetOTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req OTPRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response := Response{Status: "error", Error: "Invalid request body"}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+	if !isValidEmail(req.Email) {
+		response := Response{Status: "error", Error: "Invalid email format"}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+	if u, gerr := ah.db.Get("users", req.Email); gerr != nil || u == nil {
+		response := Response{Status: "error", Error: "User not found"}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(response)
+		return
+	} else {
+		otp := ah.generateOTP(req.Email)
+
+		if err := ah.mailSender.SendOTP(req.Email, otp, otp); err != nil {
+			fmt.Printf("SendResetOTP error: %v\n", err)
+			response := Response{Status: "error", Error: err.Error()}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+
+		response := Response{Status: "success", Message: "OTP sent successfully", Data: OTPResponse{Email: req.Email, OTP: otp}}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+}
+
 func (ah *AuthHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -614,6 +661,14 @@ func SendOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	globalAuthHandler.SendOTP(w, r)
+}
+
+func SendResetOTP(w http.ResponseWriter, r *http.Request) {
+	if globalAuthHandler == nil {
+		http.Error(w, "Auth handler not initialized", http.StatusInternalServerError)
+		return
+	}
+	globalAuthHandler.SendResetOTP(w, r)
 }
 
 func ChangePassword(w http.ResponseWriter, r *http.Request) {

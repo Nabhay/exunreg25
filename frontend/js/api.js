@@ -126,6 +126,19 @@ window.ExunServices.auth = {
             return { success: false, message: msg };
         }
     }
+    ,
+    sendResetOTP: async function(email) {
+        try {
+            const resp = await window.ExunServices.api.apiRequest('/auth/send-reset-otp', { method: 'POST', body: JSON.stringify({ email }) });
+            return { success: true, message: resp.message || 'OTP sent', data: resp.data };
+        } catch (err) {
+            const msg = (err && err.message) ? err.message : 'Failed to send reset OTP';
+            if (msg.toLowerCase().includes('user not found')) {
+                return { success: false, type: 'user_not_found', message: 'No account found with this email' };
+            }
+            return { success: false, message: msg };
+        }
+    }
 };
 
 window.ExunServices.events = {
